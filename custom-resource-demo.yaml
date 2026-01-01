@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Lambda-backed Custom Resource Demo"
+
+Resources:
+  # Lambda関数の実行ロール
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudWatchLogsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+        - PolicyName: S3ReadAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListAllMyBuckets
+                Resource: "*"
+
+  # カスタムリソースを処理するLambda関数
+  CustomResourceFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-CustomHandler"
+      Handler: index.handler
+      Runtime: python3.12
+      Timeout: 300
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import cfnresponse
+          import boto3
+
+          def handler(event, context):
+              request_type = event["RequestType"]
+
+              try:
+                  # S3バケット一覧を取得
+                  print("\n=== S3バケット一覧===")
+                  s3_client = boto3.client('s3')
+                  response = s3_client.list_buckets()
+                  bucket_count = len(response['Buckets'])
+                  print(f"バケット数: {bucket_count}")
+                  for bucket in response['Buckets']:
+                      bucket_name = bucket['Name']
+                      creation_date = bucket['CreationDate'].strftime('%Y-%m-%d %H:%M:%S')
+                      print(f"{creation_date} {bucket_name}")
+                  print("=" * 50)
+
+                  response_data = {
+                      "Message": f"処理完了 (RequestType: {request_type})",
+                      "S3BucketCount": bucket_count
+                  }
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+              except Exception as e:
+                  print(f"エラー発生: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+
+  # カスタムリソース本体
+  MyCustomResource:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt CustomResourceFunction.Arn
+
+Outputs:
+  CustomResourceMessage:
+    Description: "カスタムリソースからの応答メッセージ"
+    Value: !GetAtt MyCustomResource.Message
+
+  S3BucketCount:
+    Description: "S3バケットの数"
+    Value: !GetAtt MyCustomResource.S3BucketCount
